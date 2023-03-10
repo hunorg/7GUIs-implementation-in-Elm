@@ -7,6 +7,7 @@ import Html exposing (Html, input, table, td, text, th, tr)
 import Html.Attributes exposing (style, type_, value)
 import Html.Events exposing (onDoubleClick, onInput)
 import Json.Decode as Decode
+import List.Extra exposing (remove)
 import Parser exposing (..)
 import Set
 
@@ -23,13 +24,17 @@ type alias Cell =
     { pos : Pos
     , formula : String
     , value : Result String String -- The result of evaluating the formula, or an error message
-    , dependencies : List Pos
+    , deps : List Pos
     }
+
+
+type alias Deps =
+    Dict String (List String)
 
 
 type alias Spreadsheet =
     { cells : Dict String Cell
-    , dependencies : Dict String (List Pos)
+    , deps : Deps
     }
 
 
@@ -75,6 +80,12 @@ posToString { col, row } =
     String.fromChar col ++ String.fromInt row
 
 
+posFromString : String -> Maybe Pos
+posFromString input =
+    run posParser input
+        |> Result.toMaybe
+
+
 cellToString : Cell -> String
 cellToString cell =
     case cell.value of
@@ -90,7 +101,7 @@ emptyCell pos =
     { pos = pos
     , formula = ""
     , value = Ok ""
-    , dependencies = []
+    , deps = []
     }
 
 
@@ -268,30 +279,63 @@ initialModel : Model
 initialModel =
     { spreadsheet =
         { cells =
-            let
-                colLabels =
-                    List.map Char.fromCode (List.range 65 90)
-
-                -- A to Z in Unicode
-            in
             List.range 0 99
                 |> List.concatMap
                     (\row ->
-                        List.map
-                            (\( colLabel, _ ) ->
-                                let
-                                    pos =
-                                        { col = colLabel, row = row }
-                                in
-                                ( posToString pos, { pos = pos, formula = "", value = Err "", dependencies = [] } )
-                            )
-                            (List.map (\c -> ( c, () )) colLabels)
+                        List.range 65 90
+                            |> List.map
+                                (\col ->
+                                    let
+                                        pos =
+                                            { col = Char.fromCode col, row = row }
+
+                                        cell =
+                                            case posToString pos of
+                                                "A0" ->
+                                                    { pos = pos, formula = "Food", value = Ok "Food", deps = [] }
+
+                                                "A1" ->
+                                                    { pos = pos, formula = "dogfood:", value = Ok "dogfood", deps = [] }
+
+                                                "A2" ->
+                                                    { pos = pos, formula = "catfood:", value = Ok "catfood", deps = [] }
+
+                                                "A3" ->
+                                                    { pos = pos, formula = "parrotfood:", value = Ok "parrotfood", deps = [] }
+
+                                                "B1" ->
+                                                    { pos = pos, formula = "=15", value = Ok "15", deps = [] }
+
+                                                "B2" ->
+                                                    { pos = pos, formula = "=13", value = Ok "13", deps = [] }
+
+                                                "B3" ->
+                                                    { pos = pos, formula = "=8", value = Ok "8", deps = [] }
+
+                                                "C1" ->
+                                                    { pos = pos, formula = "Total:", value = Ok "Total:", deps = [] }
+
+                                                "C2" ->
+                                                    { pos = pos, formula = "Average:", value = Ok "Average:", deps = [] }
+
+                                                "D1" ->
+                                                    { pos = pos, formula = "=(B1:B3)", value = Ok "36", deps = [ { col = 'B', row = 1 }, { col = 'B', row = 2 }, { col = 'B', row = 3 } ]  }
+
+                                                "D2" ->
+                                                    { pos = pos, formula = "=div(D1, 3)", value = Ok "12", deps = [ { col = 'D', row = 1 } ] }
+
+                                                _ ->
+                                                    { pos = pos, formula = "", value = Err "", deps = [] }
+                                    in
+                                    ( posToString pos, cell )
+                                )
                     )
                 |> Dict.fromList
-        , dependencies = Dict.fromList []
+        , deps = Dict.fromList []
         }
     , editing = Nothing
     }
+
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -327,14 +371,88 @@ update msg model =
 
                         Nothing ->
                             spreadsheet.cells
+
+                updatedSpreadsheet =
+                    { spreadsheet | cells = updatedCells }
+
+                refreshedModel =
+                    refreshSpreadsheet { model | spreadsheet = updatedSpreadsheet }
             in
-            ( { model | spreadsheet = { spreadsheet | cells = updatedCells } }, Cmd.none )
+            ( refreshedModel, Cmd.none )
 
         FinishEditing ->
             ( { model | editing = Nothing }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
+
+
+refreshCell : Model -> String -> Model
+refreshCell model posString =
+    case posFromString posString of
+        Just pos ->
+            let
+                spreadsheet =
+                    model.spreadsheet
+
+                deps =
+                    spreadsheet.deps
+
+                cells =
+                    spreadsheet.cells
+
+                cell =
+                    Dict.get (posToString pos) cells |> Maybe.withDefault (emptyCell pos)
+
+                formula =
+                    cell.formula
+
+                newValue =
+                    if formula == "" then
+                        Ok ""
+
+                    else
+                        case evalInput formula of
+                            Just cellContent ->
+                                evalCellContent model cellContent
+
+                            Nothing ->
+                                Err "parsing failed"
+
+                updatedCell =
+                    { cell | value = newValue }
+
+                updatedCells =
+                    Dict.update (posToString pos) (\_ -> Just updatedCell) cells
+
+                updatedDeps =
+                    updateDepsFor pos { old = cell.deps, new = dependentsOnPos pos deps } deps
+
+                updatedSpreadsheet =
+                    { spreadsheet | cells = updatedCells, deps = updatedDeps }
+            in
+            { model | spreadsheet = updatedSpreadsheet }
+
+        Nothing ->
+            model
+
+
+refreshSpreadsheet : Model -> Model
+refreshSpreadsheet model =
+    let
+        spreadsheet =
+            model.spreadsheet
+
+        cells =
+            spreadsheet.cells
+
+        positions =
+            Dict.keys cells
+
+        updatedModel =
+            List.foldl (\pos m -> refreshCell m pos) model positions
+    in
+    updatedModel
 
 
 view : Model -> Html Msg
@@ -511,6 +629,82 @@ evalListPos model listPos =
             List.map (Maybe.withDefault 0) listMaybeFloat
     in
     List.map (getRefVal model) listPos |> maybeToVal |> List.foldl (+) 0
+
+
+
+--dependencies:
+
+
+dependentsOnPos : Pos -> Deps -> List Pos
+dependentsOnPos pos deps =
+    Dict.get (posToString pos) deps
+        |> Maybe.withDefault []
+        |> List.filterMap posFromString
+
+
+updateDepsFor : Pos -> { old : List Pos, new : List Pos } -> Deps -> Deps
+updateDepsFor pos posDeps deps =
+    let
+        removeDep dep deps_ =
+            Dict.update (posToString dep)
+                (\maybeDependents ->
+                    maybeDependents
+                        |> Maybe.map (\dependents -> remove (posToString pos) dependents)
+                        |> Maybe.andThen
+                            (\dependents ->
+                                if List.isEmpty dependents then
+                                    Nothing
+
+                                else
+                                    Just dependents
+                            )
+                )
+                deps_
+
+        listInsert element list =
+            list ++ [ element ]
+
+        addDep dep deps_ =
+            Dict.update (posToString dep)
+                (\maybeDependents ->
+                    maybeDependents
+                        |> Maybe.withDefault []
+                        |> listInsert (posToString pos)
+                        |> Just
+                )
+                deps_
+
+        depsWithoutOld =
+            List.foldl removeDep deps posDeps.old
+    in
+    List.foldl addDep depsWithoutOld posDeps.new
+
+
+getDepsFromExpr : Expr -> List Pos
+getDepsFromExpr expr =
+    case expr of
+        ExprNum _ ->
+            []
+
+        ExprRef ref ->
+            [ ref ]
+
+        ExprRange range ->
+            case getAllPosFromRange range of
+                Ok positions ->
+                    positions
+
+                Err _ ->
+                    []
+
+        ExprBinOp { args } ->
+            args
+                |> List.concatMap getDepsFromExpr
+
+
+dependencies : Cell -> List Pos
+dependencies cell =
+    cell.deps
 
 
 
