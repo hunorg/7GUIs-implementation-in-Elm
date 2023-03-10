@@ -295,13 +295,13 @@ initialModel =
                                                     { pos = pos, formula = "Food", value = Ok "Food", deps = [] }
 
                                                 "A1" ->
-                                                    { pos = pos, formula = "dogfood:", value = Ok "dogfood", deps = [] }
+                                                    { pos = pos, formula = "dogfood:", value = Ok "dogfood:", deps = [] }
 
                                                 "A2" ->
-                                                    { pos = pos, formula = "catfood:", value = Ok "catfood", deps = [] }
+                                                    { pos = pos, formula = "catfood:", value = Ok "catfood:", deps = [] }
 
                                                 "A3" ->
-                                                    { pos = pos, formula = "parrotfood:", value = Ok "parrotfood", deps = [] }
+                                                    { pos = pos, formula = "parrotfood:", value = Ok "parrotfood:", deps = [] }
 
                                                 "B1" ->
                                                     { pos = pos, formula = "=15", value = Ok "15", deps = [] }
